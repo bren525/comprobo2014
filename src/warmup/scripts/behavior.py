@@ -17,6 +17,17 @@ def getch():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return ch
 
+###############################################################################
+#
+#
+#
+###############################################################################
+class Wall():
+    def __init__(self):
+        self.present = False
+        self.side = 'left'
+        self.contacts = [0,0]
+
 class Robot():
     def __init__(self):
         self.pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
@@ -28,24 +39,19 @@ class Robot():
         self.ranges = []
         self.mode = 'teleop'
 
-###############################################################################
-#
-#
-#
-###############################################################################
-   def handle_scan(self, msg):
+        self.direction = 1 # 1 = left, -1 = right
+
+    def handle_scan(self, msg):
         """Captures each scan published by the robot"""
         self.ranges = msg.ranges
-        for i in range(len(self.ranges)):
-            if self.ranges[i] > 7:
-                self.ranges[i] = 0
-
+        print self.ranges
+    
     def key_catcher(self,args,kwargs):
         """Used to manually force behavior of robot"""
         c = ' '
         while(c != 't'):
             c = getch()
-            #print c
+            print c
             if c == 'w':
                 self.msg = Twist(linear=Vector3(x=self.linear_vel))
             elif c == 'a':
@@ -56,12 +62,27 @@ class Robot():
                 self.msg = Twist(angular=Vector3(z=-1*self.turn_vel))
             elif c == '1':
                 self.mode = 'teleop'
+                self.msg = Twist()
             elif c == '2':
                 self.mode = 'wall'
+                self.msg = Twist()
             elif c == '3':
                 self.mode = 'avoid'
+                self.msg = Twist()
             else:
                 self.msg = Twist()
+    
+    def check_for_wall(self):
+        wall = Wall()
+        quadrants = [[],[],[],[]]
+        for contact in range(4):
+            for i in range(45*wall - 2, 45*wall + 3):
+                if self.ranges[i] > 0:
+                    quadrants[contact].append(self.ranges(i))
+        if len(uadrants[0]) > 0 and len(quadrants[1]) > 0:
+            wall.side = left
+            wall.quadrants
+        return wall
 
     def wall_follow(self):
         valid_forward = []
@@ -80,33 +101,42 @@ class Robot():
             forward_av = sum(valid_forward)/float(len(valid_forward))
             reverse_av = sum(valid_reverse)/float(len(valid_reverse))
             print 'forw: '+ str(forward_av) +' revr: ' + str(reverse_av) + ' diff: '+str((forward_av - reverse_av)*1)
-            ang_vel = ((forward_av - reverse_av)*1) + ()
+            ang_vel = ((forward_av - reverse_av)*1)
             self.msg = Twist(linear=Vector3(x=.3),angular=Vector3(z=ang_vel))
             
         else:
             self.mode = 'teleop'
+            print "No wall"
 
     def object_avoidance(self):
-        obstacles = self.ranges[-20:21]
-        valid_obstacles = []
-        left_points,right_points = 0
 
-        for i in ranges(len(obstacles)):
-            if obstacles[i] != 0:
-                valid_obstacles.append(obstacles[i])
-                if i<20:
+
+        valid_obstacles = []
+        left_points = 0
+        right_points = 0
+
+        for i in range(-20,21):
+            if self.ranges[i] != 0:
+                valid_obstacles.append(self.ranges[i])
+                if i>0:
                     left_points += 1
-                elif i>=20:
+                elif i<0:
                     right_points += 1
 
-        direction = 1 # left
-        if left_points > right_points:
-            direction = -1 #right
-
-        average_dist = sum(valid_obstacles)/float(len(valid_obstacles))
-        lin_vel = 
-
-
+        if len(valid_obstacles) > 0:
+            if left_points > right_points:
+                self.direction = -1 #right
+            elif right_points > left_points:
+                self.direction = 1 #left
+            #print "right" if direction == -1 else "left"
+            print str(left_points) + "," +str(right_points)
+            average_dist = sum(valid_obstacles)/float(len(valid_obstacles))
+            lin_vel = (average_dist - .2) * .2
+            ang_vel = (5 - average_dist) * self.direction * .4
+            self.msg = Twist(linear=Vector3(x=lin_vel),angular=Vector3(z=ang_vel))
+        else:
+            self.msg = Twist(linear=Vector3(x=self.linear_vel))
+            print "No obstacles"
 
 
     def run(self):
@@ -115,6 +145,8 @@ class Robot():
         while not rospy.is_shutdown():
             if self.mode == 'wall':
                 self.wall_follow()
+            elif self.mode == 'avoid':
+                self.object_avoidance()
             self.pub.publish(self.msg)
             r.sleep()
             
