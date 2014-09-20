@@ -28,23 +28,34 @@ class Wall():
         self.side = 'left'
         self.contacts = [0,0]
 
+class Obstacle():
+    def __init__(self):
+        self.present = False
+        self.average_dist = 0
+
 class Robot():
     def __init__(self):
         self.pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.handle_scan, None)
         rospy.init_node('robot', anonymous=True)
-        self.turn_vel = .4
+        self.ang_vel = .4
         self.linear_vel = 1
         self.msg = Twist()
         self.ranges = []
         self.mode = 'teleop'
 
+        self.degree_offset = 30
+        self.dist_to_wall = .5
+
         self.direction = 1 # 1 = left, -1 = right
 
     def handle_scan(self, msg):
         """Captures each scan published by the robot"""
-        self.ranges = msg.ranges
-        print self.ranges
+        if(len(msg.ranges) < 360):
+            print "Error Less than 360 pts: " +str(len(msg.ranges))
+        else:
+            self.ranges = msg.ranges
+        #print self.ranges
     
     def key_catcher(self,args,kwargs):
         """Used to manually force behavior of robot"""
@@ -55,11 +66,11 @@ class Robot():
             if c == 'w':
                 self.msg = Twist(linear=Vector3(x=self.linear_vel))
             elif c == 'a':
-                self.msg = Twist(angular=Vector3(z=self.turn_vel))
+                self.msg = Twist(angular=Vector3(z=self.ang_vel))
             elif c == 's':
                 self.msg = Twist(linear=Vector3(x=-1*self.linear_vel))
             elif c == 'd':
-                self.msg = Twist(angular=Vector3(z=-1*self.turn_vel))
+                self.msg = Twist(angular=Vector3(z=-1*self.ang_vel))
             elif c == '1':
                 self.mode = 'teleop'
                 self.msg = Twist()
@@ -72,19 +83,51 @@ class Robot():
             else:
                 self.msg = Twist()
     
-    def check_for_wall(self):
+    def find_wall(self):
         wall = Wall()
-        quadrants = [[],[],[],[]]
-        for contact in range(4):
-            for i in range(45*wall - 2, 45*wall + 3):
+        
+        quadrants = [list(),list(),list(),list()]
+        for side in range(2):
+            for i in range((90+(180 * side) - self.degree_offset) - 2, 
+                (90+(180 * side) - self.degree_offset) +3):
                 if self.ranges[i] > 0:
-                    quadrants[contact].append(self.ranges(i))
-        if len(uadrants[0]) > 0 and len(quadrants[1]) > 0:
-            wall.side = left
-            wall.quadrants
+                    quadrants[side*2].append(self.ranges[i])
+            for i in range((90+(180 * side) + self.degree_offset) - 2, 
+                (90+(180 * side) + self.degree_offset) +3):
+                if self.ranges[i] > 0:
+                    quadrants[side*2+1].append(self.ranges[i])
+        
+        if len(quadrants[0]) > 0 and len(quadrants[1]) > 0:
+            wall.present = True
+            wall.side = 'left'
+            wall.contacts[0] = sum(quadrants[0])/float(len(quadrants[0]))
+            wall.contacts[1] = sum(quadrants[1])/float(len(quadrants[1]))
+        elif len(quadrants[2]) > 0 and len(quadrants[3]) >0:
+            wall.present = True
+            wall.side = 'right'
+            wall.contacts[0] = sum(quadrants[2])/float(len(quadrants[2]))
+            wall.contacts[1] = sum(quadrants[3])/float(len(quadrants[3]))
         return wall
 
     def wall_follow(self):
+        wall = self.find_wall()
+
+        if self.find_obstacle().present and wall.present:
+            if wall.side == "right":
+                self.msg = Twist(angular=Vector3(z=1*self.ang_vel))
+            else:
+                self.msg = Twist(angular=Vector3(z=-1*self.ang_vel))
+
+        elif wall.present:
+            ang_vel = ((wall.contacts[0] - wall.contacts[1])*1)
+            self.msg = Twist(linear=Vector3(x=.3),angular=Vector3(z=ang_vel))
+            
+        else:
+            self.mode = 'avoid'
+            print "No wall"
+
+
+    def leagacy_wall_follow(self):
         valid_forward = []
         valid_reverse = []
         right = 1
@@ -106,17 +149,17 @@ class Robot():
             
         else:
             self.mode = 'teleop'
+            self.msg = Twist()
             print "No wall"
 
-    def object_avoidance(self):
-
-
+    def find_obstacle(self):
+        obstacle = Obstacle()
         valid_obstacles = []
         left_points = 0
         right_points = 0
 
-        for i in range(-20,21):
-            if self.ranges[i] != 0:
+        for i in range(-35,36):
+            if self.ranges[i] != 0 and self.ranges[i] < 1:
                 valid_obstacles.append(self.ranges[i])
                 if i>0:
                     left_points += 1
@@ -124,19 +167,30 @@ class Robot():
                     right_points += 1
 
         if len(valid_obstacles) > 0:
+            obstacle.present = True
+            obstacle.average_dist = sum(valid_obstacles)/float(len(valid_obstacles))
             if left_points > right_points:
                 self.direction = -1 #right
             elif right_points > left_points:
                 self.direction = 1 #left
-            #print "right" if direction == -1 else "left"
-            print str(left_points) + "," +str(right_points)
-            average_dist = sum(valid_obstacles)/float(len(valid_obstacles))
-            lin_vel = (average_dist - .2) * .2
-            ang_vel = (5 - average_dist) * self.direction * .4
+
+        return obstacle
+
+
+    def object_avoidance(self):
+        if self.find_wall().present:
+            print "Found Wall"
+            self.mode = "wall"
+            return
+
+        obstacle = self.find_obstacle()
+        if obstacle.present:  
+            lin_vel = (obstacle.average_dist) * .2
+            ang_vel = (self.direction * 1)/obstacle.average_dist
             self.msg = Twist(linear=Vector3(x=lin_vel),angular=Vector3(z=ang_vel))
         else:
             self.msg = Twist(linear=Vector3(x=self.linear_vel))
-            print "No obstacles"
+            #print "No obstacles"
 
 
     def run(self):
