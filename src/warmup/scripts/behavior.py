@@ -4,6 +4,7 @@ import rospy
 from geometry_msgs.msg import Twist, Vector3
 from sensor_msgs.msg import LaserScan
 import thread
+import math
 
 def getch():
     """ Return the next character typed on the keyboard """
@@ -38,16 +39,21 @@ class Robot():
         self.pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.handle_scan, None)
         rospy.init_node('robot', anonymous=True)
-        self.ang_vel = .4
+        self.ang_vel = .8
         self.linear_vel = 1
         self.msg = Twist()
         self.ranges = []
         self.mode = 'teleop'
 
         self.degree_offset = 30
-        self.dist_to_wall = .5
+        self.dist_to_wall = .15
+        self.contact_dist = self.dist_to_wall / math.cos(float(self.degree_offset)*math.pi/180)
+        self.wall_detect_dist = 1.5
+        self.wall_followed = False
 
         self.direction = 1 # 1 = left, -1 = right
+        self.obstacle_view = 60
+        self.obstacle_dist = 1
 
     def handle_scan(self, msg):
         """Captures each scan published by the robot"""
@@ -90,11 +96,11 @@ class Robot():
         for side in range(2):
             for i in range((90+(180 * side) - self.degree_offset) - 2, 
                 (90+(180 * side) - self.degree_offset) +3):
-                if self.ranges[i] > 0:
+                if self.ranges[i] > 0 and self.ranges[i] < self.wall_detect_dist:
                     quadrants[side*2].append(self.ranges[i])
             for i in range((90+(180 * side) + self.degree_offset) - 2, 
                 (90+(180 * side) + self.degree_offset) +3):
-                if self.ranges[i] > 0:
+                if self.ranges[i] > 0 and self.ranges[i] < self.wall_detect_dist:
                     quadrants[side*2+1].append(self.ranges[i])
         
         if len(quadrants[0]) > 0 and len(quadrants[1]) > 0:
@@ -112,54 +118,35 @@ class Robot():
     def wall_follow(self):
         wall = self.find_wall()
 
-        if self.find_obstacle().present and wall.present:
-            if wall.side == "right":
-                self.msg = Twist(angular=Vector3(z=1*self.ang_vel))
-            else:
+        if self.find_obstacle(10).present and wall.present and self.wall_followed:
+            print "Obstacle; Leaving Wall"
+            if wall.side == "left":
                 self.msg = Twist(angular=Vector3(z=-1*self.ang_vel))
+            else:
+                self.msg = Twist(angular=Vector3(z=1*self.ang_vel))
+            return
 
         elif wall.present:
-            ang_vel = ((wall.contacts[0] - wall.contacts[1])*1)
+            if abs(wall.contacts[0] - wall.contacts[1]) < .05 and not self.wall_followed:
+                self.wall_followed = True
+                print "Following Wall..."
+            wall_dist_factor = ((sum(wall.contacts)/2) - self.contact_dist) * (1 if wall.side == 'left' else -1)
+            ang_vel = 1 * (wall.contacts[0] - wall.contacts[1]) # + .5 * wall_dist_factor
             self.msg = Twist(linear=Vector3(x=.3),angular=Vector3(z=ang_vel))
             
         else:
             self.mode = 'avoid'
-            print "No wall"
+            self.wall_followed = False
+            print "Left Wall"
 
-
-    def leagacy_wall_follow(self):
-        valid_forward = []
-        valid_reverse = []
-        right = 1
-        for i in range(43+right*180,48+right*180):
-            #print 'ranges'+str(i) +str(self.ranges[i])
-            if self.ranges[i] > 0:
-                valid_forward.append(self.ranges[i])
-        for i in range(133+right*180,138+right*180):
-            #print 'ranges'+str(i) +str(self.ranges[i])
-            if self.ranges[i] > 0:
-                valid_reverse.append(self.ranges[i])
-
-        if len(valid_reverse) > 0 and len(valid_forward) > 0:
-            forward_av = sum(valid_forward)/float(len(valid_forward))
-            reverse_av = sum(valid_reverse)/float(len(valid_reverse))
-            print 'forw: '+ str(forward_av) +' revr: ' + str(reverse_av) + ' diff: '+str((forward_av - reverse_av)*1)
-            ang_vel = ((forward_av - reverse_av)*1)
-            self.msg = Twist(linear=Vector3(x=.3),angular=Vector3(z=ang_vel))
-            
-        else:
-            self.mode = 'teleop'
-            self.msg = Twist()
-            print "No wall"
-
-    def find_obstacle(self):
+    def find_obstacle(self, view):
         obstacle = Obstacle()
         valid_obstacles = []
         left_points = 0
         right_points = 0
 
-        for i in range(-35,36):
-            if self.ranges[i] != 0 and self.ranges[i] < 1:
+        for i in range(-1*int(math.floor(view)),int(math.floor(view))+1):
+            if self.ranges[i] > 0 and self.ranges[i] < self.obstacle_dist:
                 valid_obstacles.append(self.ranges[i])
                 if i>0:
                     left_points += 1
@@ -183,7 +170,7 @@ class Robot():
             self.mode = "wall"
             return
 
-        obstacle = self.find_obstacle()
+        obstacle = self.find_obstacle(self.obstacle_view)
         if obstacle.present:  
             lin_vel = (obstacle.average_dist) * .2
             ang_vel = (self.direction * 1)/obstacle.average_dist
