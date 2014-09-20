@@ -41,6 +41,7 @@ from std_msgs.msg import String
 from geometry_msgs.msg import Twist, Vector3
 from sensor_msgs.msg import LaserScan
 
+
 mean_distance = -1.0
 
 def scan_received(msg, pub):
