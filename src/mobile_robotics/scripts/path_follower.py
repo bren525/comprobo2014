@@ -16,7 +16,7 @@ class Robot():
 	def __init__(self):
 		self.cmd = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
 		self.goal_pub = rospy.Publisher('/waypoint',PointStamped)
-		self.pose_pub = rospy.Publisher('/my_pose',PoseStamped)
+		self.pose_pub = rospy.Publisher('/robot_pose',PoseStamped)
 		rospy.init_node('robot', anonymous=True)
 		self.msg = Twist()
 		self.waypoints = []
@@ -29,25 +29,20 @@ class Robot():
 		self.path_sub = rospy.Subscriber('/dijkstra_path', Path, self.update_path, None)
 		#self.odom = rospy.Subscriber('/odom', Odometry, self.update_odom, None)
 		self.particle = rospy.Subscriber('/amcl_best',PoseStamped, self.update_particle, None)
-		self.clicked_point = rospy.Subscriber('/clicked_point',PointStamped, self.add_waypoint, None)
+		#self.clicked_point = rospy.Subscriber('/clicked_point',PointStamped, self.add_waypoint, None)
 
 	def add_waypoint(self,msg):
 		self.waypoints.append([msg.point.x,msg.point.y])	
 
 	def update_path(self,msg):
 		waypoints = []
-		ox = self.origin[0]*self.cells_per_meter - msg.poses[0].pose.position.x
-		oy = self.origin[1]*self.cells_per_meter - msg.poses[0].pose.position.y
-		
 		for each in msg.poses:
-			x = (each.pose.position.x + ox)/self.cells_per_meter
-			y = (each.pose.position.y + oy)/self.cells_per_meter
+			x = each.pose.position.x
+			y = each.pose.position.y
 			waypoints.append([x,y])
 		self.waypoints = waypoints
 
 	def update_odom(self,msg):
-		#if (self.origin == [0,0]):
-			#self.origin = [msg.pose.pose.position.x,msg.pose.pose.position.y]
 		x = msg.pose.pose.position.x
 		y = msg.pose.pose.position.y
 		z = math.atan2(2* (msg.pose.pose.orientation.z * msg.pose.pose.orientation.w),1 - 2 * ((msg.pose.pose.orientation.y)**2 + (msg.pose.pose.orientation.z)**2))
@@ -89,13 +84,14 @@ class Robot():
 
 			lin_vel = 0
 			if math.fabs((desired_z - self.pose.z)) < (math.pi/10) or (2*math.pi - abs(dist)) < (math.pi/10):
-				lin_vel = min(.1, .2 * d)
+				lin_vel = min(.2, .1 * d)
 
 			self.msg = Twist(linear = Vector3(x = lin_vel), angular = Vector3(z = ang_vel))
 			#Jank Odom
-			self.pose.x += (lin_vel/10) * math.cos(self.pose.z)
-			self.pose.y += (lin_vel/10) * math.sin(self.pose.z)
-			self.pose.z += (ang_vel/10)
+			s = 12
+			self.pose.x += (lin_vel/s) * math.cos(self.pose.z)
+			self.pose.y += (lin_vel/s) * math.sin(self.pose.z)
+			self.pose.z += (ang_vel/s)
 
 		else:
 			print("Done with Path")
